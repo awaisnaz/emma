@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { useSession, signIn, signOut } from "next-auth/react";
 import DeleteConfirmationModal from './components/DeleteConfirmationModal';
+import Link from 'next/link';
 
 export default function Home() {
   const { data: session, status } = useSession();
@@ -51,10 +52,31 @@ export default function Home() {
     }
   }, []);
 
-  // Sync with backend when logged in
+  // Load chats from backend
+  const loadChatsFromBackend = async () => {
+    if (session?.user?.email) {
+      try {
+        const response = await fetch('/api/chats', {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          }
+        });
+        
+        if (!response.ok) throw new Error('Failed to load chats');
+        
+        const data = await response.json();
+        setMessages(data.chats || []);
+      } catch (error) {
+        console.error('Failed to load chats:', error);
+      }
+    }
+  };
+
+  // Modify useEffect for session to load chats
   useEffect(() => {
     if (session) {
-      syncWithBackend();
+      loadChatsFromBackend();
     }
   }, [session]);
 
@@ -69,44 +91,6 @@ export default function Home() {
       localStorage.setItem(`messages_${currentSessionId}`, JSON.stringify(messages));
     }
   }, [messages, currentSessionId]);
-
-  const syncWithBackend = async () => {
-    if (!session?.user) return;
-
-    try {
-      const response = await fetch('/api/sync', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          sessions,
-          messages: sessions.map(session => ({
-            sessionId: session.id,
-            messages: JSON.parse(localStorage.getItem(`messages_${session.id}`) || '[]')
-          }))
-        })
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || 'Sync failed');
-      }
-
-      const data = await response.json();
-      setSessions(data.sessions);
-      
-      if (currentSessionId) {
-        const currentSessionMessages = data.messages.find(
-          m => m.sessionId === currentSessionId
-        )?.messages || [];
-        setMessages(currentSessionMessages);
-      }
-    } catch (error) {
-      console.error('Sync failed:', error);
-      // You might want to add a toast notification here
-    }
-  };
 
   const createNewSession = () => {
     const newSession = {
@@ -145,52 +129,60 @@ export default function Home() {
     }
   };
 
+  // Modify handleSubmit to save chats to backend
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!inputMessage.trim()) return;
 
-    // Create new session if none exists
-    if (!currentSessionId) {
-      const newSession = {
-        id: Date.now().toString(),
-        title: inputMessage.slice(0, 30) + (inputMessage.length > 30 ? '...' : ''),
-        timestamp: new Date().toISOString()
-      };
-      setSessions(prev => [newSession, ...prev]);
-      setCurrentSessionId(newSession.id);
-    }
-
     const newMessage = {
-      id: Date.now(),
       content: inputMessage,
       role: 'user',
-      timestamp: new Date().toISOString()
     };
 
     setMessages(prev => [...prev, newMessage]);
     setInputMessage('');
     setIsLoading(true);
 
-    // Simulate AI response
-    setTimeout(() => {
+    try {
+      // Save user message to backend
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          content: inputMessage,
+          role: 'user',
+          email: session?.user?.email
+        })
+      });
+
+      // Simulate AI response (replace with your actual AI integration)
       const aiResponse = {
-        id: Date.now() + 1,
         content: "This is a simulated AI response. Replace this with your actual AI integration.",
         role: 'assistant',
-        timestamp: new Date().toISOString()
       };
-      setMessages(prev => [...prev, aiResponse]);
-      setIsLoading(false);
 
-      // Update session title if it's the first message
-      if (messages.length === 0) {
-        setSessions(prev => prev.map(session => 
-          session.id === currentSessionId 
-            ? { ...session, title: inputMessage.slice(0, 30) + (inputMessage.length > 30 ? '...' : '') }
-            : session
-        ));
-      }
-    }, 1000);
+      setMessages(prev => [...prev, aiResponse]);
+
+      // Save AI response to backend
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          content: aiResponse.content,
+          role: 'assistant',
+          email: session?.user?.email
+        })
+      });
+
+    } catch (error) {
+      console.error('Failed to save chat:', error);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleSignIn = () => {
@@ -324,79 +316,24 @@ export default function Home() {
         border-r border-rose-100 dark:border-gray-700
       `}>
         {/* Sidebar Header */}
-        <div className="h-16 flex items-center justify-between px-4 border-b border-rose-100 dark:border-gray-700">
-          <button 
-            onClick={createNewSession}
-            className="flex items-center gap-3 px-3 py-2 rounded-md bg-white/50 dark:bg-gray-800/50 hover:bg-white dark:hover:bg-gray-700 transition-colors text-rose-600 dark:text-rose-300"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+        <div className="h-16 flex items-center px-6 border-b border-indigo-100 dark:border-gray-700 bg-white dark:bg-gray-800">
+          <div className="flex items-center gap-3">
+            <svg className="w-5 h-5 text-rose-300 dark:text-rose-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z" />
             </svg>
-            <span className="font-medium">New Session</span>
-          </button>
-          
-          <button 
-            className="md:hidden p-2 rounded-md hover:bg-white/50 dark:hover:bg-gray-700 text-rose-600 dark:text-rose-300"
-            onClick={() => setIsSidebarOpen(false)}
-          >
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+            <span className="text-lg font-semibold text-gray-800 dark:text-white">Integration Tools</span>
+          </div>
         </div>
 
         {/* Recent Sessions */}
-        <div className="flex-1 overflow-y-auto p-4 text-gray-800 dark:text-white">
-          <h2 className="text-sm font-semibold text-rose-600 dark:text-rose-300 mb-3 uppercase tracking-wide">Recent sessions</h2>
-          <div className="space-y-2">
-            {sessions.map((session, index) => (
-              <div
-                key={index}
-                className={`
-                  group flex items-center justify-between w-full px-3 py-2 rounded-md 
-                  ${currentSessionId === session.id 
-                    ? 'bg-rose-500/10 dark:bg-rose-500/20' 
-                    : 'bg-white/50 dark:bg-gray-800/50 hover:bg-white dark:hover:bg-gray-700'} 
-                  transition-colors cursor-pointer
-                `}
-                onClick={() => {
-                  setCurrentSessionId(session.id);
-                  const savedMessages = localStorage.getItem(`messages_${session.id}`);
-                  if (savedMessages) {
-                    setMessages(JSON.parse(savedMessages));
-                  }
-                  setIsSidebarOpen(false);
-                }}
-              >
-                <div className="flex items-center gap-3 text-sm text-left flex-1 min-w-0">
-                  <svg className="w-4 h-4 flex-shrink-0 text-rose-400 dark:text-rose-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
-                      d="M17 8h2a2 2 0 012 2v6a2 2 0 01-2 2h-2v4l-4-4H9a1.994 1.994 0 01-1.414-.586m0 0L11 14h4a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2v4l.586-.586z"
-                    />
-                  </svg>
-                  <span className="truncate font-medium">{session.title}</span>
-                </div>
-                <button 
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDeleteSession(session.id);
-                  }}
-                  className={`
-                    p-1 rounded-md hover:bg-rose-50 dark:hover:bg-gray-600 
-                    text-gray-400 hover:text-rose-500 dark:hover:text-rose-300 
-                    ${currentSessionId === session.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} 
-                    transition-opacity
-                  `}
-                  title="Delete chat"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
-                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                    />
-                  </svg>
-                </button>
-              </div>
-            ))}
+        <div className="flex-1 overflow-y-auto p-4">
+          <div className="px-4">
+            <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-white/50 dark:bg-gray-800/50 hover:bg-white dark:hover:bg-gray-700 transition-all cursor-pointer border border-transparent hover:border-indigo-100 dark:hover:border-gray-600">
+              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="#EA4335">
+                <path d="M22 6C22 4.9 21.1 4 20 4H4C2.9 4 2 4.9 2 6V18C2 19.1 2.9 20 4 20H20C21.1 20 22 19.1 22 18V6ZM20 6L12 11L4 6H20ZM20 18H4V8L12 13L20 8V18Z" />
+              </svg>
+              <span className="text-sm font-medium text-gray-700 dark:text-gray-200">Gmail</span>
+            </div>
           </div>
         </div>
 
@@ -448,7 +385,7 @@ export default function Home() {
                 </svg>
               </button>
 
-              <h1 className="text-xl font-semibold text-rose-600 dark:text-rose-300">Beauty Expert AI</h1>
+              <h1 className="text-xl font-semibold text-rose-600 dark:text-rose-300">Nexus AI - Your Intelligent Assistant</h1>
 
               {/* Auth Button remains but styled to match */}
               {renderAuthButton()}
@@ -457,134 +394,163 @@ export default function Home() {
         </header>
 
         {/* Chat Area */}
-        <main className="flex-1 overflow-hidden bg-gradient-to-b from-rose-50 to-white dark:from-gray-800 dark:to-gray-900">
-          <div className="max-w-3xl mx-auto h-full flex flex-col">
-            {messages.length === 0 ? (
-              // Welcome Screen
-              <div className="flex-1 flex items-center justify-center p-4">
-                <div className="text-center space-y-8">
-                  <div className="space-y-2">
-                    <h1 className="text-4xl font-bold text-rose-600 dark:text-rose-300">Beauty Expert AI</h1>
-                    <p className="text-gray-600 dark:text-gray-400 text-lg">
-                      Your personal luxury beauty advisor
-                    </p>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-3xl mx-auto">
-                    <div className="p-6 rounded-xl bg-white/70 dark:bg-gray-800/50 shadow-lg border border-rose-100 dark:border-gray-700 hover:shadow-xl transition-shadow">
-                      <div className="text-rose-500 dark:text-rose-300 mb-3">
-                        <svg className="w-8 h-8 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-                        </svg>
+        <main className="flex-1 relative overflow-hidden bg-white dark:bg-gray-800">
+          <div className="flex h-full flex-col">
+            {/* Chat messages container with scrollbar at screen edge */}
+            <div className="flex-1 w-full overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300/60 hover:scrollbar-thumb-gray-400/80 dark:scrollbar-thumb-gray-600/60 dark:hover:scrollbar-thumb-gray-500/80 scrollbar-track-transparent">
+              <div className="flex justify-center">
+                <div className="w-full max-w-[60%] px-4">
+                  <div className="flex flex-col gap-6 py-4 md:py-8">
+                    {messages.length === 0 ? (
+                      // Welcome Screen (centered within the 60% container)
+                      <div className="flex-1 flex items-center justify-center min-h-[70vh]">
+                        <div className="text-center space-y-8">
+                          <div className="space-y-2">
+                            <h1 className="text-4xl font-bold text-indigo-600 dark:text-indigo-300">Nexus AI</h1>
+                            <p className="text-gray-600 dark:text-gray-400 text-lg">
+                              Your intelligent business assistant
+                            </p>
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-3xl mx-auto">
+                            <div className="p-6 rounded-xl bg-white/70 dark:bg-gray-800/50 shadow-lg border border-indigo-100 dark:border-gray-700 hover:shadow-xl transition-shadow">
+                              <div className="text-indigo-500 dark:text-indigo-300 mb-3">
+                                <svg className="w-8 h-8 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                </svg>
+                              </div>
+                              <h2 className="font-semibold mb-2 text-gray-800 dark:text-white">Book Parlour</h2>
+                              <p className="text-sm text-gray-600 dark:text-gray-300">
+                                Schedule and manage appointments easily
+                              </p>
+                            </div>
+                            <div className="p-6 rounded-xl bg-white/70 dark:bg-gray-800/50 shadow-lg border border-indigo-100 dark:border-gray-700 hover:shadow-xl transition-shadow">
+                              <div className="text-indigo-500 dark:text-indigo-300 mb-3">
+                                <svg className="w-8 h-8 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                                </svg>
+                              </div>
+                              <h2 className="font-semibold mb-2 text-gray-800 dark:text-white">Service People</h2>
+                              <p className="text-sm text-gray-600 dark:text-gray-300">
+                                Manage your service team efficiently
+                              </p>
+                            </div>
+                            <div className="p-6 rounded-xl bg-white/70 dark:bg-gray-800/50 shadow-lg border border-indigo-100 dark:border-gray-700 hover:shadow-xl transition-shadow">
+                              <div className="text-indigo-500 dark:text-indigo-300 mb-3">
+                                <svg className="w-8 h-8 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                                </svg>
+                              </div>
+                              <h2 className="font-semibold mb-2 text-gray-800 dark:text-white">Email Marketing</h2>
+                              <p className="text-sm text-gray-600 dark:text-gray-300">
+                                Create and manage email campaigns
+                              </p>
+                            </div>
+                          </div>
+                        </div>
                       </div>
-                      <h2 className="font-semibold mb-2 text-gray-800 dark:text-white">Beauty Tips</h2>
-                      <p className="text-sm text-gray-600 dark:text-gray-300">
-                        Get personalized skincare routines and beauty advice
-                      </p>
-                    </div>
-                    <div className="p-6 rounded-xl bg-white/70 dark:bg-gray-800/50 shadow-lg border border-rose-100 dark:border-gray-700 hover:shadow-xl transition-shadow">
-                      <div className="text-rose-500 dark:text-rose-300 mb-3">
-                        <svg className="w-8 h-8 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" />
-                        </svg>
+                    ) : (
+                      // Chat Messages
+                      messages.map((message) => (
+                        <div 
+                          key={message.id}
+                          className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                        >
+                          <div className={`
+                            max-w-[85%] rounded-2xl px-4 py-3 shadow-sm
+                            ${message.role === 'user' 
+                              ? 'bg-indigo-600 text-white' 
+                              : 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-white'}
+                          `}>
+                            {message.content}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                    {isLoading && (
+                      <div className="flex justify-start">
+                        <div className="bg-gray-100 dark:bg-gray-700 rounded-2xl px-4 py-3 shadow-sm">
+                          <div className="animate-pulse flex gap-1">
+                            <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                            <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce [animation-delay:0.2s]"></div>
+                            <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce [animation-delay:0.4s]"></div>
+                          </div>
+                        </div>
                       </div>
-                      <h2 className="font-semibold mb-2 text-gray-800 dark:text-white">Product Advice</h2>
-                      <p className="text-sm text-gray-600 dark:text-gray-300">
-                        Discover luxury beauty products tailored to you
-                      </p>
-                    </div>
-                    <div className="p-6 rounded-xl bg-white/70 dark:bg-gray-800/50 shadow-lg border border-rose-100 dark:border-gray-700 hover:shadow-xl transition-shadow">
-                      <div className="text-rose-500 dark:text-rose-300 mb-3">
-                        <svg className="w-8 h-8 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                        </svg>
-                      </div>
-                      <h2 className="font-semibold mb-2 text-gray-800 dark:text-white">Salon Finder</h2>
-                      <p className="text-sm text-gray-600 dark:text-gray-300">
-                        Find top-rated beauty salons near you
-                      </p>
-                    </div>
+                    )}
                   </div>
                 </div>
               </div>
-            ) : (
-              // Chat Messages
-              <div className="flex-1 overflow-y-auto p-4 space-y-6">
-                {messages.map((message) => (
-                  <div 
-                    key={message.id}
-                    className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                  >
-                    <div className={`
-                      max-w-[80%] rounded-xl p-4 shadow-sm
-                      ${message.role === 'user' 
-                        ? 'bg-rose-500 text-white' 
-                        : 'bg-white dark:bg-gray-800 text-gray-800 dark:text-white border border-rose-100 dark:border-gray-700'}
-                    `}>
-                      {message.content}
-                    </div>
-                  </div>
-                ))}
-                {isLoading && (
-                  <div className="flex justify-start">
-                    <div className="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-sm border border-rose-100 dark:border-gray-700">
-                      <div className="animate-pulse">Thinking...</div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
+            </div>
 
-            {/* Chat Input */}
-            <div className="border-t border-rose-100 dark:border-gray-700 bg-white/50 dark:bg-gray-800/50 p-4">
-              <form onSubmit={handleSubmit} className="max-w-3xl mx-auto relative">
-                <textarea 
-                  className="w-full p-4 pr-12 rounded-xl border border-rose-100 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-white focus:outline-none focus:border-rose-300 dark:focus:border-rose-500 resize-none shadow-sm"
-                  placeholder="Ask about beauty tips, luxury products, or find premium salons..."
-                  rows={1}
-                  value={inputMessage}
-                  onChange={(e) => setInputMessage(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-                      handleSubmit(e);
-                    }
-                  }}
-                />
-                <button 
-                  type="submit"
-                  className="absolute right-3 bottom-3 p-2 rounded-lg text-rose-500 hover:bg-rose-50 dark:hover:bg-gray-700"
-                >
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M22 2L11 13M22 2L15 22L11 13M11 13L2 9" />
-                  </svg>
-                </button>
-              </form>
-              <p className="text-center text-xs text-gray-500 dark:text-gray-400 mt-2">
-                Beauty Expert AI provides luxury beauty advice. Always consult professionals for specific treatments.
-              </p>
+            {/* Chat input form */}
+            <div className="w-full border-t border-gray-100 dark:border-gray-700 bg-white dark:bg-gray-800">
+              <div className="flex justify-center">
+                <div className="w-full max-w-[60%] px-4 py-4 md:py-6">
+                  <form onSubmit={handleSubmit} className="relative">
+                    <div className="flex items-center gap-3">
+                      <div className="relative flex-1">
+                        <textarea 
+                          className="w-full resize-none rounded-xl pl-4 pr-32 py-3 bg-gray-100 dark:bg-gray-700 border-0 focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 text-gray-800 dark:text-white placeholder-gray-400"
+                          placeholder="Message Enterprise AI..."
+                          rows={1}
+                          value={inputMessage}
+                          onChange={(e) => setInputMessage(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                              e.preventDefault();
+                              handleSubmit(e);
+                            }
+                          }}
+                        />
+                        <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
+                          <button 
+                            type="button" 
+                            className="p-2 rounded-lg text-gray-400 hover:text-indigo-500 hover:bg-gray-200/50 dark:hover:bg-gray-600/50 transition-colors inline-flex items-center justify-center"
+                            aria-label="Add image"
+                          >
+                            <svg className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                            </svg>
+                          </button>
+                          <button 
+                            type="button" 
+                            className="p-2 rounded-lg text-gray-400 hover:text-indigo-500 hover:bg-gray-200/50 dark:hover:bg-gray-600/50 transition-colors inline-flex items-center justify-center"
+                            aria-label="Attach file"
+                          >
+                            <svg className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
+                            </svg>
+                          </button>
+                          <button 
+                            type="button" 
+                            className="p-2 rounded-lg text-gray-400 hover:text-indigo-500 hover:bg-gray-200/50 dark:hover:bg-gray-600/50 transition-colors inline-flex items-center justify-center"
+                            aria-label="Voice input"
+                          >
+                            <svg className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
+                              <path d="M19 10v2a7 7 0 01-14 0v-2" />
+                              <line x1="12" y1="19" x2="12" y2="23" />
+                              <line x1="8" y1="23" x2="16" y2="23" />
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+                      <button 
+                        type="submit" 
+                        className="p-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white transition-colors inline-flex items-center justify-center"
+                        disabled={!inputMessage.trim()}
+                      >
+                        <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M7 11L12 6M12 6L17 11M12 6V20" />
+                        </svg>
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
             </div>
           </div>
         </main>
-
-        {/* Footer */}
-        <footer className="h-16 bg-white dark:bg-gray-800 border-t border-rose-100 dark:border-gray-700">
-          <div className="h-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex justify-between items-center h-full">
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                Beauty Expert AI - Your Luxury Beauty Assistant
-              </p>
-              <div className="flex gap-4">
-                <a href="#" className="text-sm text-gray-500 dark:text-gray-400 hover:text-rose-500 dark:hover:text-rose-300">
-                  Privacy Policy
-                </a>
-                <a href="#" className="text-sm text-gray-500 dark:text-gray-400 hover:text-rose-500 dark:hover:text-rose-300">
-                  Terms of Service
-                </a>
-              </div>
-            </div>
-          </div>
-        </footer>
       </div>
 
       <DeleteConfirmationModal
