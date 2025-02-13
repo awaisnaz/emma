@@ -1,8 +1,9 @@
 'use client';
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useSession, signIn, signOut } from "next-auth/react";
 import DeleteConfirmationModal from './components/DeleteConfirmationModal';
 import Link from 'next/link';
+import { Toaster, toast } from 'react-hot-toast';
 
 export default function Home() {
   const { data: session, status } = useSession();
@@ -18,6 +19,10 @@ export default function Home() {
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [deleteMode, setDeleteMode] = useState('clear'); // 'clear' or 'delete'
   const [sessionToDelete, setSessionToDelete] = useState(null);
+  const messagesEndRef = useRef(null);
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const dropdownRef = useRef(null);
 
   // Set mounted state
   useEffect(() => {
@@ -92,56 +97,21 @@ export default function Home() {
     }
   }, [messages, currentSessionId]);
 
-  const createNewSession = () => {
-    const newSession = {
-      id: Date.now().toString(),
-      title: 'New Session',
-      timestamp: new Date().toISOString()
-    };
-
-    setSessions(prev => [newSession, ...prev]);
-    setCurrentSessionId(newSession.id);
-    setMessages([]);
-  };
-
-  const deleteSession = (sessionId) => {
-    if (window.confirm('Are you sure you want to delete this session?')) {
-      setSessions(prev => prev.filter(session => session.id !== sessionId));
-      localStorage.removeItem(`messages_${sessionId}`);
-      
-      if (currentSessionId === sessionId) {
-        setCurrentSessionId(null);
-        setMessages([]);
-      }
-    }
-  };
-
-  const clearAllSessions = () => {
-    if (window.confirm('Are you sure you want to clear all session history?')) {
-      // Clear all session messages from local storage
-      sessions.forEach(session => {
-        localStorage.removeItem(`messages_${session.id}`);
-      });
-      
-      setSessions([]);
-      setCurrentSessionId(null);
-      setMessages([]);
-    }
-  };
-
   // Modify handleSubmit to save chats to backend
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!inputMessage.trim()) return;
-
-    const newMessage = {
-      content: inputMessage,
-      role: 'user',
-    };
-
-    setMessages(prev => [...prev, newMessage]);
-    setInputMessage('');
+    
     setIsLoading(true);
+    const userMessage = inputMessage;
+    setInputMessage(''); // Clear input immediately for better UX
+
+    // Immediately show the user message
+    setMessages(prevMessages => [...prevMessages, {
+      _id: `temp-${Date.now()}`,
+      content: userMessage,
+      role: 'user'
+    }]);
 
     try {
       // Save user message to backend
@@ -151,19 +121,28 @@ export default function Home() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          content: inputMessage,
+          content: userMessage,
           role: 'user',
           email: session?.user?.email
         })
       });
 
-      // Simulate AI response (replace with your actual AI integration)
-      const aiResponse = {
-        content: "This is a simulated AI response. Replace this with your actual AI integration.",
-        role: 'assistant',
-      };
+      // Get AI response from our AI endpoint
+      const aiResult = await fetch('/api/ai', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: userMessage
+        })
+      });
 
-      setMessages(prev => [...prev, aiResponse]);
+      if (!aiResult.ok) {
+        throw new Error('Failed to get AI response');
+      }
+      
+      const { response: aiResponse } = await aiResult.json();
 
       // Save AI response to backend
       await fetch('/api/chats', {
@@ -172,14 +151,31 @@ export default function Home() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          content: aiResponse.content,
+          content: aiResponse,
           role: 'assistant',
           email: session?.user?.email
         })
       });
 
+      // Fetch fresh data from backend
+      const response = await fetch('/api/chats', {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
+      
+      if (!response.ok) throw new Error('Failed to fetch updated chats');
+      
+      const data = await response.json();
+      setMessages(data.chats || []);
+
     } catch (error) {
-      console.error('Failed to save chat:', error);
+      console.error('Chat operation failed:', error);
+      toast.error('Failed to send message');
+      
+      // Remove the temporary message if there was an error
+      setMessages(prevMessages => prevMessages.filter(msg => !msg._id.startsWith('temp-')));
     } finally {
       setIsLoading(false);
     }
@@ -193,9 +189,19 @@ export default function Home() {
     signOut();
   };
 
-  const handleCloseSidebar = () => {
-    setIsSidebarOpen(false);
-  };
+  // Add click outside handler
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setIsDropdownOpen(false);
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
 
   const renderAuthButton = () => {
     if (status === "loading") {
@@ -207,9 +213,9 @@ export default function Home() {
     }
 
     return (
-      <div className="relative group">
+      <div className="relative" ref={dropdownRef}>
         <button 
-          onClick={() => !session ? handleSignIn() : null}
+          onClick={() => session ? setIsDropdownOpen(!isDropdownOpen) : handleSignIn()}
           className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
         >
           {session?.user ? (
@@ -249,12 +255,15 @@ export default function Home() {
           )}
         </button>
         
-        {session?.user && (
-          <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-gray-800 rounded-lg shadow-xl border dark:border-gray-700 hidden group-hover:block">
+        {session?.user && isDropdownOpen && (
+          <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 z-50">
             <div className="p-2">
               <button
-                onClick={handleSignOut}
-                className="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors"
+                onClick={() => {
+                  signOut();
+                  setIsDropdownOpen(false);
+                }}
+                className="w-full text-left px-4 py-2 mt-1 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors"
               >
                 Sign out
               </button>
@@ -270,25 +279,84 @@ export default function Home() {
     setIsDeleteModalOpen(true);
   };
 
-  const handleDeleteSession = (sessionId) => {
-    setDeleteMode('delete');
-    setSessionToDelete(sessionId);
-    setIsDeleteModalOpen(true);
-  };
-
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (deleteMode === 'clear') {
+      // Always clear local storage
       setMessages([]);
       setSessions([]);
       setCurrentSessionId(null);
+      localStorage.removeItem('sessions');
+      localStorage.removeItem('currentSessionId');
+      
+      // If user is logged in, also clear backend
+      if (session?.user?.email) {
+        try {
+          const response = await fetch('/api/chats', {
+            method: 'DELETE',
+            headers: {
+              'Content-Type': 'application/json',
+            }
+          });
+          
+          if (!response.ok) {
+            toast.error('Failed to clear chat history from backend');
+          } else {
+            toast.success('Chat history cleared successfully');
+          }
+        } catch (error) {
+          console.error('Error clearing chat history:', error);
+          toast.error('Error clearing chat history');
+        }
+      } else {
+        // Show success message for local storage clear
+        toast.success('Chat history cleared successfully');
+      }
     } else if (deleteMode === 'delete' && sessionToDelete) {
       setSessions(prev => prev.filter(session => session.id !== sessionToDelete));
       if (currentSessionId === sessionToDelete) {
         setCurrentSessionId(null);
         setMessages([]);
       }
+      toast.success('Session deleted successfully');
     }
     setIsDeleteModalOpen(false);
+  };
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  // Scroll to bottom when messages change
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  const handleSendTestEmail = async () => {
+    try {
+      setIsSendingEmail(true);
+      const response = await fetch('/api/send-email', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          to: "awais.nazir.ch@gmail.com" // You can make this dynamic later
+        }),
+      });
+
+      const data = await response.json();
+      
+      if (data.success) {
+        toast.success('Email sent successfully!');
+      } else {
+        throw new Error(data.error || 'Failed to send email');
+      }
+    } catch (error) {
+      console.error('Error sending email:', error);
+      toast.error(error.message || 'Failed to send email');
+    } finally {
+      setIsSendingEmail(false);
+    }
   };
 
   // Don't render content until mounted
@@ -298,6 +366,30 @@ export default function Home() {
 
   return (
     <div className={`flex h-screen ${isDarkMode ? 'dark' : ''}`}>
+      {/* Change toast.Toaster to just Toaster */}
+      <Toaster 
+        position="top-center"
+        toastOptions={{
+          duration: 3000,
+          style: {
+            background: isDarkMode ? '#374151' : '#fff',
+            color: isDarkMode ? '#fff' : '#374151',
+          },
+          success: {
+            iconTheme: {
+              primary: '#10B981',
+              secondary: 'white',
+            },
+          },
+          error: {
+            iconTheme: {
+              primary: '#EF4444',
+              secondary: 'white',
+            },
+          },
+        }}
+      />
+
       {/* Overlay for mobile - closes sidebar when clicking outside */}
       {isSidebarOpen && (
         <div
@@ -306,7 +398,7 @@ export default function Home() {
         />
       )}
 
-      {/* Sidebar - updated with luxury theme */}
+      {/* Sidebar - reorganized layout */}
       <div className={`
         fixed md:static top-0 left-0 w-64 h-full 
         bg-gradient-to-b from-rose-50 to-pink-50 dark:from-gray-900 dark:to-gray-800
@@ -315,24 +407,86 @@ export default function Home() {
         md:translate-x-0 z-50 flex flex-col
         border-r border-rose-100 dark:border-gray-700
       `}>
-        {/* Sidebar Header */}
+        {/* Sidebar Header with Dashboard title */}
         <div className="h-16 flex items-center px-6 border-b border-indigo-100 dark:border-gray-700 bg-white dark:bg-gray-800">
           <div className="flex items-center gap-3">
             <svg className="w-5 h-5 text-rose-300 dark:text-rose-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
             </svg>
-            <span className="text-lg font-semibold text-gray-800 dark:text-white">Integration Tools</span>
+            <span className="text-lg font-semibold text-gray-800 dark:text-white">Dashboard</span>
           </div>
         </div>
 
-        {/* Recent Sessions */}
+        {/* Main Sidebar Content */}
         <div className="flex-1 overflow-y-auto p-4">
-          <div className="px-4">
-            <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-white/50 dark:bg-gray-800/50 hover:bg-white dark:hover:bg-gray-700 transition-all cursor-pointer border border-transparent hover:border-indigo-100 dark:hover:border-gray-600">
-              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="#EA4335">
-                <path d="M22 6C22 4.9 21.1 4 20 4H4C2.9 4 2 4.9 2 6V18C2 19.1 2.9 20 4 20H20C21.1 20 22 19.1 22 18V6ZM20 6L12 11L4 6H20ZM20 18H4V8L12 13L20 8V18Z" />
+          <div className="space-y-4">
+            {/* Usage Card */}
+            <div className="px-4 py-3 bg-white/50 dark:bg-gray-800/50 rounded-lg">
+              <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Usage</h3>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between text-sm">
+                  <div className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                    </svg>
+                    <span className="text-gray-600 dark:text-gray-400">Emails Sent</span>
+                  </div>
+                  <span className="font-medium text-gray-700 dark:text-gray-300">24</span>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <div className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 19v-8.93a2 2 0 01.89-1.664l7-4.666a2 2 0 012.22 0l7 4.666A2 2 0 0121 10.07V19M3 19a2 2 0 002 2h14a2 2 0 002-2M3 19l6.75-4.5M21 19l-6.75-4.5M3 10l6.75 4.5M21 10l-6.75 4.5m0 0l-1.14.76a2 2 0 01-2.22 0l-1.14-.76" />
+                    </svg>
+                    <span className="text-gray-600 dark:text-gray-400">Email Replies</span>
+                  </div>
+                  <span className="font-medium text-gray-700 dark:text-gray-300">18</span>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <div className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                    <span className="text-gray-600 dark:text-gray-400">Scheduled Meetings</span>
+                  </div>
+                  <span className="font-medium text-gray-700 dark:text-gray-300">3</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Pricing and Balance Card */}
+        <div className="px-4 py-4 bg-white dark:bg-gray-800 border-t border-rose-100 dark:border-gray-700">
+          <div className="space-y-3">
+            {/* Pricing Info */}
+            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Pricing</h3>
+            <div className="flex items-center gap-2">
+              <svg className="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
               </svg>
-              <span className="text-sm font-medium text-gray-700 dark:text-gray-200">Gmail</span>
+              <span className="text-sm text-gray-600 dark:text-gray-400">First 50 emails free</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <svg className="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+              <span className="text-sm text-gray-600 dark:text-gray-400">1¢ per email after</span>
+            </div>
+            {/* Balance and Add Funds */}
+            <div className="space-y-2 pt-2 border-t border-gray-100 dark:border-gray-700">
+              <div className="flex items-center gap-2">
+                <svg className="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                </svg>
+                <span className="text-sm font-medium text-gray-600 dark:text-gray-300">Balance: $10.00</span>
+              </div>
+              <button 
+                onClick={() => {/* Add wallet logic */}}
+                className="w-full text-sm px-3 py-1.5 bg-emerald-500 text-white rounded-md hover:bg-emerald-600 transition-colors"
+              >
+                Add Funds
+              </button>
             </div>
           </div>
         </div>
@@ -385,7 +539,7 @@ export default function Home() {
                 </svg>
               </button>
 
-              <h1 className="text-xl font-semibold text-rose-600 dark:text-rose-300">Nexus AI - Your Intelligent Assistant</h1>
+              <h1 className="text-xl font-semibold text-rose-600 dark:text-rose-300">Emma AI - Email Marketing Assistant</h1>
 
               {/* Auth Button remains but styled to match */}
               {renderAuthButton()}
@@ -437,7 +591,7 @@ export default function Home() {
                             <div className="p-6 rounded-xl bg-white/70 dark:bg-gray-800/50 shadow-lg border border-indigo-100 dark:border-gray-700 hover:shadow-xl transition-shadow">
                               <div className="text-indigo-500 dark:text-indigo-300 mb-3">
                                 <svg className="w-8 h-8 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                                 </svg>
                               </div>
                               <h2 className="font-semibold mb-2 text-gray-800 dark:text-white">Email Marketing</h2>
@@ -452,7 +606,7 @@ export default function Home() {
                       // Chat Messages
                       messages.map((message) => (
                         <div 
-                          key={message.id}
+                          key={message._id}
                           className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
                         >
                           <div className={`
@@ -477,6 +631,8 @@ export default function Home() {
                         </div>
                       </div>
                     )}
+                    {/* Invisible element to scroll to */}
+                    <div ref={messagesEndRef} />
                   </div>
                 </div>
               </div>
@@ -490,7 +646,7 @@ export default function Home() {
                     <div className="flex items-center gap-3">
                       <div className="relative flex-1">
                         <textarea 
-                          className="w-full resize-none rounded-xl pl-4 pr-32 py-3 bg-gray-100 dark:bg-gray-700 border-0 focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 text-gray-800 dark:text-white placeholder-gray-400"
+                          className="w-full resize-none rounded-xl pl-4 pr-4 py-3 bg-gray-100 dark:bg-gray-700 border-0 focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 text-gray-800 dark:text-white placeholder-gray-400"
                           placeholder="Message Enterprise AI..."
                           rows={1}
                           value={inputMessage}
@@ -502,38 +658,6 @@ export default function Home() {
                             }
                           }}
                         />
-                        <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
-                          <button 
-                            type="button" 
-                            className="p-2 rounded-lg text-gray-400 hover:text-indigo-500 hover:bg-gray-200/50 dark:hover:bg-gray-600/50 transition-colors inline-flex items-center justify-center"
-                            aria-label="Add image"
-                          >
-                            <svg className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                            </svg>
-                          </button>
-                          <button 
-                            type="button" 
-                            className="p-2 rounded-lg text-gray-400 hover:text-indigo-500 hover:bg-gray-200/50 dark:hover:bg-gray-600/50 transition-colors inline-flex items-center justify-center"
-                            aria-label="Attach file"
-                          >
-                            <svg className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
-                            </svg>
-                          </button>
-                          <button 
-                            type="button" 
-                            className="p-2 rounded-lg text-gray-400 hover:text-indigo-500 hover:bg-gray-200/50 dark:hover:bg-gray-600/50 transition-colors inline-flex items-center justify-center"
-                            aria-label="Voice input"
-                          >
-                            <svg className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
-                              <path d="M19 10v2a7 7 0 01-14 0v-2" />
-                              <line x1="12" y1="19" x2="12" y2="23" />
-                              <line x1="8" y1="23" x2="16" y2="23" />
-                            </svg>
-                          </button>
-                        </div>
                       </div>
                       <button 
                         type="submit" 

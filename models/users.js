@@ -1,4 +1,4 @@
-const mongoose = require('mongoose');
+import mongoose from 'mongoose';
 
 const usersSchema = new mongoose.Schema({
   email: {
@@ -8,7 +8,10 @@ const usersSchema = new mongoose.Schema({
   }
 }, { timestamps: true });
 
-module.exports = mongoose.model('users', usersSchema);
+// Prevent model recompilation error
+const Users = mongoose.models.users || mongoose.model('users', usersSchema);
+
+export default Users;
 
 async function handleAuth(req, res) {
   try {

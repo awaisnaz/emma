@@ -1,4 +1,4 @@
-const mongoose = require('mongoose');
+import mongoose from 'mongoose';
 
 const chatsSchema = new mongoose.Schema({
   userId: {
@@ -17,4 +17,7 @@ const chatsSchema = new mongoose.Schema({
   }
 }, { timestamps: true });  // This automatically adds createdAt and updatedAt fields
 
-module.exports = mongoose.model('chats', chatsSchema); 
+// Prevent model recompilation error
+const Chats = mongoose.models.chats || mongoose.model('chats', chatsSchema);
+
+export default Chats; 

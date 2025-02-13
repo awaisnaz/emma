@@ -61,4 +61,30 @@ export async function POST(req) {
     console.error('Failed to save chat:', error);
     return NextResponse.json({ error: 'Failed to save chat' }, { status: 500 });
   }
+}
+
+export async function DELETE(req) {
+  try {
+    const session = await getServerSession(authOptions);
+    
+    if (!session?.user?.email) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    await connectDB();
+
+    // Find user
+    const user = await Users.findOne({ email: session.user.email });
+    if (!user) {
+      return NextResponse.json({ error: 'User not found' }, { status: 404 });
+    }
+
+    // Delete all chats for this user
+    await Chats.deleteMany({ userId: user._id });
+
+    return NextResponse.json({ message: 'Chats deleted successfully' });
+  } catch (error) {
+    console.error('Failed to delete chats:', error);
+    return NextResponse.json({ error: 'Failed to delete chats' }, { status: 500 });
+  }
 } 
