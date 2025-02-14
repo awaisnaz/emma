@@ -465,13 +465,19 @@ export default function Home() {
               <svg className="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
               </svg>
-              <span className="text-sm text-gray-600 dark:text-gray-400">First 50 emails free</span>
+              <span className="text-sm text-gray-600 dark:text-gray-400">First 10 new emails free</span>
             </div>
             <div className="flex items-center gap-2">
               <svg className="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
               </svg>
-              <span className="text-sm text-gray-600 dark:text-gray-400">1¢ per email after</span>
+              <span className="text-sm text-gray-600 dark:text-gray-400">10¢ per email after</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <svg className="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+              <span className="text-sm text-gray-600 dark:text-gray-400">Interaction with existing emails free forever</span>
             </div>
             {/* Balance and Add Funds */}
             <div className="space-y-2 pt-2 border-t border-gray-100 dark:border-gray-700">
